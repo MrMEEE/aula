@@ -16,6 +16,7 @@ from .const import (
     MEEBOOK_API,
     SYSTEMATIC_API,
     EASYIQ_API,
+    EASYIQ_SKOLEPORTAL_API,
 )
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
 from .aula_login_client.client import AulaLoginClient
@@ -1080,131 +1081,282 @@ class Client:
                     token = self.get_token(easyiq_widget)
                     csrf_token = self._get_csrf_token()
 
+                    # 1. Try EasyIQ Skoleportal API (skoleportal.easyiqcloud.dk)
+                    easyiq_session = requests.Session()
                     easyiq_headers = {
-                        "x-aula-institutionfilter": str(self._institutionProfiles[0]),
-                        "x-aula-userprofile": "guardian",
                         "Authorization": token,
-                        "accept": "application/json",
-                        "origin": "https://www.aula.dk",
-                        "referer": "https://www.aula.dk/",
-                        "authority": "api.easyiqcloud.dk",
+                        "X-UserProfile": "guardian",
+                        "X-Login": guardian,
+                        "X-InstitutionFilter": ",".join(self._institutionProfiles),
+                        "X-ChildFilter": ",".join(self._childuserids),
+                        "Accept": "application/json, text/plain, */*",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
                     }
                     if csrf_token:
                         easyiq_headers["csrfp-token"] = csrf_token
+
+                    events_by_child = {}
+                    try:
+                        auth_resp = easyiq_session.post(
+                            EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
+                            headers=easyiq_headers,
+                            json={},
+                            verify=True,
+                            timeout=10,
+                        )
+                        _LOGGER.debug("EasyIQ Skoleportal Auth status %s: %s", auth_resp.status_code, auth_resp.text[:500])
+                        login_id = None
+                        if auth_resp.status_code == 200:
+                            try:
+                                auth_json = auth_resp.json()
+                                login_id = auth_json.get("LoginId") or auth_json.get("loginId") or auth_json.get("id")
+                            except Exception:
+                                pass
+
+                        try:
+                            year, week_num = week.split("-W")
+                            target_date = datetime.datetime.strptime(f"{year}-W{week_num}-1", "%Y-W%W-%w").strftime("%Y-%m-%d")
+                        except Exception:
+                            target_date = datetime.datetime.now().strftime("%Y-%m-%d")
+
+                        params = {
+                            "courseFilter": "-1",
+                            "textFilter": "",
+                            "ownWeekPlan": "false",
+                            "date": target_date,
+                        }
+                        if login_id:
+                            params["loginId"] = str(login_id)
+
+                        events_resp = easyiq_session.get(
+                            EASYIQ_SKOLEPORTAL_API + "/CalendarGetWeekplanEvents",
+                            headers=easyiq_headers,
+                            params=params,
+                            verify=True,
+                            timeout=10,
+                        )
+                        _LOGGER.debug("EasyIQ Skoleportal events status %s: %s", events_resp.status_code, events_resp.text[:1000])
+
+                        if events_resp.status_code == 200:
+                            raw_events = events_resp.json()
+                            events_list = []
+                            if isinstance(raw_events, list):
+                                events_list = raw_events
+                            elif isinstance(raw_events, dict):
+                                events_list = (
+                                    raw_events.get("Events")
+                                    or raw_events.get("events")
+                                    or raw_events.get("data")
+                                    or raw_events.get("items")
+                                    or raw_events.get("WeekPlan")
+                                    or []
+                                )
+
+                            if events_list:
+                                for child in self._childrenFirstNamesAndUserIDs.items():
+                                    first_name = child[1]
+                                    events_by_child[first_name] = events_list
+                    except Exception as err:
+                        _LOGGER.warning("EasyIQ Skoleportal API call failed: %s", err)
 
                     for child in self._childrenFirstNamesAndUserIDs.items():
                         userid = child[0]
                         first_name = child[1]
 
-                        _LOGGER.debug("EasyIQ headers " + str(easyiq_headers))
-                        post_data = {
-                            "sessionId": guardian,
-                            "currentWeekNr": week,
-                            "userProfile": "guardian",
-                            "institutionFilter": self._institutionProfiles,
-                            "childFilter": [userid],
-                        }
-                        _LOGGER.debug("EasyIQ post data " + str(post_data))
-                        ugeplaner = requests.post(
-                            EASYIQ_API + "/weekplaninfo",
-                            json=post_data,
-                            headers=easyiq_headers,
-                            verify=True,
-                        )
-                        # _LOGGER.debug(
-                        #    "EasyIQ Opgaver status_code " + str(ugeplaner.status_code)
-                        # )
-                        _LOGGER.debug(
-                            "EasyIQ Opgaver response " + str(ugeplaner.json())
-                        )
-                        _ugep = (
-                            "<h2>"
-                            # + ugeplaner.json()["Weekplan"]["ActivityName"]
-                            + " Uge "
-                            + week.split("-W")[1]
-                            # + ugeplaner.json()["Weekplan"]["WeekNo"]
-                            + "</h2>"
-                        )
-                        # from datetime import datetime
+                        if first_name in events_by_child:
+                            events_list = events_by_child[first_name]
+                            week_num_str = week.split("-W")[-1] if "-W" in week else week
+                            _ugep = f"<h2>Uge {week_num_str}</h2>"
 
-                        def findDay(date):
-                            day, month, year = (int(i) for i in date.split(" "))
-                            dayNumber = calendar.weekday(year, month, day)
-                            days = [
-                                "Mandag",
-                                "Tirsdag",
-                                "Onsdag",
-                                "Torsdag",
-                                "Fredag",
-                                "Lørdag",
-                                "Søndag",
-                            ]
-                            return days[dayNumber]
+                            def parse_dt(dt_str):
+                                if not dt_str or not isinstance(dt_str, str):
+                                    return None
+                                clean_str = dt_str.split(".")[0].replace("Z", "").replace("T", " ")
+                                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d"):
+                                    try:
+                                        return datetime.datetime.strptime(clean_str, fmt)
+                                    except ValueError:
+                                        pass
+                                return None
 
-                        def is_correct_format(date_string, format):
+                            days = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"]
+                            events_by_day = {}
+                            important_notes = []
+
+                            for item in events_list:
+                                if not isinstance(item, dict):
+                                    continue
+                                title = item.get("title") or item.get("Title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or ""
+                                desc = item.get("description") or item.get("Description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or ""
+                                owner = item.get("ownername") or item.get("ownerName") or item.get("OwnerName") or item.get("teacher") or item.get("Teacher") or ""
+                                start_str = item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
+                                end_str = item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
+
+                                start_dt = parse_dt(start_str)
+                                end_dt = parse_dt(end_str)
+
+                                if start_dt:
+                                    day_name = days[start_dt.weekday()]
+                                    day_date = start_dt.date()
+                                    time_str = start_dt.strftime("%H:%M")
+                                    if end_dt:
+                                        time_str += f"-{end_dt.strftime('%H:%M')}"
+                                    
+                                    day_key = (day_date, day_name)
+                                    if day_key not in events_by_day:
+                                        events_by_day[day_key] = []
+                                    events_by_day[day_key].append({
+                                        "time": time_str,
+                                        "title": title or owner,
+                                        "desc": desc,
+                                        "owner": owner if title else "",
+                                    })
+                                elif title or desc:
+                                    important_notes.append({"title": title, "desc": desc, "owner": owner})
+
+                            if important_notes:
+                                _ugep += "<h3>Vigtig information</h3>"
+                                for note in important_notes:
+                                    if note["title"]:
+                                        _ugep += f"<br><b>{note['title']}</b>"
+                                    if note["owner"]:
+                                        _ugep += f" (<i>{note['owner']}</i>)"
+                                    if note["title"] or note["owner"]:
+                                        _ugep += "<br>"
+                                    if note["desc"]:
+                                        _ugep += f"{note['desc']}<br>"
+
+                            if events_by_day:
+                                for (day_date, day_name), day_events in sorted(events_by_day.items(), key=lambda x: x[0][0]):
+                                    _ugep += f"<br><h3>{day_name} {day_date.strftime('%d/%m')}</h3>"
+                                    for ev in day_events:
+                                        _ugep += f"<b>{ev['time']} {ev['title']}</b><br>"
+                                        if ev["owner"]:
+                                            _ugep += f"<i>{ev['owner']}</i><br>"
+                                        if ev["desc"]:
+                                            _ugep += f"{ev['desc']}<br>"
+
+                            if thisnext == "this":
+                                self.ugep_attr[first_name] = _ugep
+                            elif thisnext == "next":
+                                self.ugepnext_attr[first_name] = _ugep
+                            _LOGGER.debug("EasyIQ Skoleportal result for %s: %s", first_name, _ugep)
+                        else:
+                            # 2. Fallback to legacy EasyIQ API
+                            easyiq_headers = {
+                                "x-aula-institutionfilter": str(self._institutionProfiles[0]),
+                                "x-aula-userprofile": "guardian",
+                                "Authorization": token,
+                                "accept": "application/json",
+                                "origin": "https://www.aula.dk",
+                                "referer": "https://www.aula.dk/",
+                                "authority": "api.easyiqcloud.dk",
+                            }
+                            if csrf_token:
+                                easyiq_headers["csrfp-token"] = csrf_token
+
+                            _LOGGER.debug("EasyIQ legacy headers " + str(easyiq_headers))
+                            post_data = {
+                                "sessionId": guardian,
+                                "currentWeekNr": week,
+                                "userProfile": "guardian",
+                                "institutionFilter": self._institutionProfiles,
+                                "childFilter": [userid],
+                            }
+                            _LOGGER.debug("EasyIQ legacy post data " + str(post_data))
+                            ugeplaner = requests.post(
+                                EASYIQ_API + "/weekplaninfo",
+                                json=post_data,
+                                headers=easyiq_headers,
+                                verify=True,
+                            )
+                            _LOGGER.debug(
+                                "EasyIQ legacy response " + str(ugeplaner.text)
+                            )
+                            _ugep = (
+                                "<h2>"
+                                + " Uge "
+                                + week.split("-W")[1]
+                                + "</h2>"
+                            )
+
+                            def findDay(date):
+                                day, month, year = (int(i) for i in date.split(" "))
+                                dayNumber = calendar.weekday(year, month, day)
+                                days = [
+                                    "Mandag",
+                                    "Tirsdag",
+                                    "Onsdag",
+                                    "Torsdag",
+                                    "Fredag",
+                                    "Lørdag",
+                                    "Søndag",
+                                ]
+                                return days[dayNumber]
+
+                            def is_correct_format(date_string, format):
+                                try:
+                                    datetime.datetime.strptime(date_string, format)
+                                    return True
+                                except ValueError:
+                                    _LOGGER.debug(
+                                        "Could not parse timestamp: " + str(date_string)
+                                    )
+                                    return False
+
                             try:
-                                datetime.datetime.strptime(date_string, format)
-                                return True
-                            except ValueError:
-                                _LOGGER.debug(
-                                    "Could not parse timestamp: " + str(date_string)
-                                )
-                                return False
-
-                        try:
-                            for i in ugeplaner.json()["Events"]:
-                                if is_correct_format(i["start"], "%Y/%m/%d %H:%M"):
-                                    _LOGGER.debug("No Event")
-                                    start_datetime = datetime.datetime.strptime(
-                                        i["start"], "%Y/%m/%d %H:%M"
-                                    )
-                                    _LOGGER.debug(start_datetime)
-                                    end_datetime = datetime.datetime.strptime(
-                                        i["end"], "%Y/%m/%d %H:%M"
-                                    )
-                                    if start_datetime.date() == end_datetime.date():
-                                        formatted_day = findDay(
-                                            start_datetime.strftime("%d %m %Y")
+                                for i in ugeplaner.json()["Events"]:
+                                    if is_correct_format(i["start"], "%Y/%m/%d %H:%M"):
+                                        _LOGGER.debug("No Event")
+                                        start_datetime = datetime.datetime.strptime(
+                                            i["start"], "%Y/%m/%d %H:%M"
                                         )
-                                        formatted_start = start_datetime.strftime(
-                                            " %H:%M"
+                                        end_datetime = datetime.datetime.strptime(
+                                            i["end"], "%Y/%m/%d %H:%M"
                                         )
-                                        formatted_end = end_datetime.strftime("- %H:%M")
-                                        dresult = f"{formatted_day} {formatted_start} {formatted_end}"
+                                        if start_datetime.date() == end_datetime.date():
+                                            formatted_day = findDay(
+                                                start_datetime.strftime("%d %m %Y")
+                                            )
+                                            formatted_start = start_datetime.strftime(
+                                                " %H:%M"
+                                            )
+                                            formatted_end = end_datetime.strftime("- %H:%M")
+                                            dresult = f"{formatted_day} {formatted_start} {formatted_end}"
+                                        else:
+                                            formatted_start = findDay(
+                                                start_datetime.strftime("%d %m %Y")
+                                            )
+                                            formatted_end = findDay(
+                                                end_datetime.strftime("%d %m %Y")
+                                            )
+                                            dresult = f"{formatted_start} {formatted_end}"
+                                        _ugep = _ugep + "<br><b>" + dresult + "</b><br>"
+                                        if i["itemType"] == "5":
+                                            _ugep = (
+                                                _ugep
+                                                + "<br><b>"
+                                                + str(i["title"])
+                                                + "</b><br>"
+                                            )
+                                        else:
+                                            _ugep = (
+                                                _ugep
+                                                + "<br><b>"
+                                                + str(i["ownername"])
+                                                + "</b><br>"
+                                            )
+                                        _ugep = _ugep + str(i["description"]) + "<br>"
                                     else:
-                                        formatted_start = findDay(
-                                            start_datetime.strftime("%d %m %Y")
-                                        )
-                                        formatted_end = findDay(
-                                            end_datetime.strftime("%d %m %Y")
-                                        )
-                                        dresult = f"{formatted_start} {formatted_end}"
-                                    _ugep = _ugep + "<br><b>" + dresult + "</b><br>"
-                                    if i["itemType"] == "5":
-                                        _ugep = (
-                                            _ugep
-                                            + "<br><b>"
-                                            + str(i["title"])
-                                            + "</b><br>"
-                                        )
-                                    else:
-                                        _ugep = (
-                                            _ugep
-                                            + "<br><b>"
-                                            + str(i["ownername"])
-                                            + "</b><br>"
-                                        )
-                                    _ugep = _ugep + str(i["description"]) + "<br>"
-                                else:
-                                    _LOGGER.debug("None")
-                        except KeyError:
-                            _LOGGER.debug("None")
+                                        _LOGGER.debug("None")
+                            except KeyError:
+                                _LOGGER.debug("None")
 
-                        if thisnext == "this":
-                            self.ugep_attr[first_name] = _ugep
-                        elif thisnext == "next":
-                            self.ugepnext_attr[first_name] = _ugep
-                        _LOGGER.debug("EasyIQ result: " + str(_ugep))
+                            if thisnext == "this":
+                                self.ugep_attr[first_name] = _ugep
+                            elif thisnext == "next":
+                                self.ugepnext_attr[first_name] = _ugep
+                            _LOGGER.debug("EasyIQ legacy result: " + str(_ugep))
 
                 if "0062" in self.widgets:
                     _LOGGER.debug("In the Huskelisten flow...")
