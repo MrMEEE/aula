@@ -19,6 +19,7 @@ from .const import (
     EASYIQ_SKOLEPORTAL_API,
 )
 from homeassistant.exceptions import ConfigEntryNotReady, ConfigEntryAuthFailed
+from homeassistant.components.calendar import CalendarEvent
 from .aula_login_client.client import AulaLoginClient
 from .aula_login_client.exceptions import AulaAuthenticationError
 
@@ -84,6 +85,7 @@ class Client:
     presence = {}
     ugep_attr = {}
     ugepnext_attr = {}
+    ugep_events = {}
     mu_opgaver_attr = {}
     mu_opgaver_next_attr = {}
     widgets = {}
@@ -1240,6 +1242,63 @@ class Client:
                                 self.ugep_attr[first_name] = _ugep
                             elif thisnext == "next":
                                 self.ugepnext_attr[first_name] = _ugep
+
+                            cph_tz = pytz.timezone("Europe/Copenhagen")
+                            if first_name not in self.ugep_events or thisnext == "this":
+                                self.ugep_events[first_name] = []
+
+                            for item in events_list:
+                                if not isinstance(item, dict):
+                                    continue
+                                item_title = item.get("title") or item.get("Title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or ""
+                                item_desc = item.get("description") or item.get("Description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or ""
+                                item_owner = item.get("ownername") or item.get("ownerName") or item.get("OwnerName") or item.get("teacher") or item.get("Teacher") or ""
+                                start_str = item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
+                                end_str = item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
+
+                                start_dt = parse_dt(start_str)
+                                end_dt = parse_dt(end_str)
+
+                                summary = item_title
+                                if item_owner and item_owner != item_title:
+                                    if summary:
+                                        summary += f" ({item_owner})"
+                                    else:
+                                        summary = item_owner
+                                if not summary:
+                                    summary = "Ugeplan"
+
+                                if start_dt:
+                                    has_time = (start_dt.hour != 0 or start_dt.minute != 0) or (end_dt and (end_dt.hour != 0 or end_dt.minute != 0))
+                                    if has_time:
+                                        ev_start = cph_tz.localize(start_dt)
+                                        if end_dt:
+                                            ev_end = cph_tz.localize(end_dt)
+                                        else:
+                                            ev_end = cph_tz.localize(start_dt + datetime.timedelta(hours=1))
+                                    else:
+                                        ev_start = start_dt.date()
+                                        if end_dt and end_dt.date() > start_dt.date():
+                                            ev_end = end_dt.date() + datetime.timedelta(days=1)
+                                        else:
+                                            ev_end = start_dt.date() + datetime.timedelta(days=1)
+                                else:
+                                    try:
+                                        y, w = week.split("-W")
+                                        m_date = datetime.datetime.strptime(f"{y}-W{w}-1", "%Y-W%W-%w").date()
+                                    except Exception:
+                                        m_date = datetime.date.today()
+                                    ev_start = m_date
+                                    ev_end = m_date + datetime.timedelta(days=1)
+
+                                self.ugep_events[first_name].append(
+                                    CalendarEvent(
+                                        summary=summary,
+                                        start=ev_start,
+                                        end=ev_end,
+                                        description=item_desc or None,
+                                    )
+                                )
                             _LOGGER.debug("EasyIQ Skoleportal result for %s: %s", first_name, _ugep)
                         else:
                             # 2. Fallback to legacy EasyIQ API
