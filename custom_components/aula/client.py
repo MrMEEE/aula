@@ -1117,9 +1117,9 @@ class Client:
 
                         try:
                             year, week_num = week.split("-W")
-                            target_date = datetime.datetime.strptime(f"{year}-W{week_num}-1", "%Y-W%W-%w").strftime("%Y-%m-%d")
+                            target_date = datetime.date.fromisocalendar(int(year), int(week_num), 1).strftime("%Y-%m-%dT00:00:00")
                         except Exception:
-                            target_date = datetime.datetime.now().strftime("%Y-%m-%d")
+                            target_date = datetime.datetime.now().strftime("%Y-%m-%dT00:00:00")
 
                         params = {
                             "courseFilter": "-1",
@@ -1173,8 +1173,8 @@ class Client:
                             def parse_dt(dt_str):
                                 if not dt_str or not isinstance(dt_str, str):
                                     return None
-                                clean_str = dt_str.split(".")[0].replace("Z", "").replace("T", " ")
-                                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d"):
+                                clean_str = dt_str.split("+")[0].split("Z")[0].split(".")[0].replace("T", " ").strip()
+                                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d", "%Y/%m/%d"):
                                     try:
                                         return datetime.datetime.strptime(clean_str, fmt)
                                     except ValueError:
