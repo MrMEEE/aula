@@ -29,6 +29,10 @@ _LOGGER = logging.getLogger(__name__)
 # schools that do not expose 0030 to guardians.
 MU_OPGAVER_WIDGETS = ("0030", "0023")
 
+# Widgets that can mint a token for the EasyIQ Ugeplan endpoint,
+# in order of preference.
+EASYIQ_WIDGETS = ("0001", "0128", "00142", "0142")
+
 
 def decode_mu_deeplink(url):
     """Return the MinUddannelse page URL embedded in an opgave "url" field.
@@ -1024,10 +1028,10 @@ class Client:
                 "0029" not in self.widgets
                 and "0004" not in self.widgets
                 and "0062" not in self.widgets
-                and "0001" not in self.widgets
+                and not any(widget in self.widgets for widget in EASYIQ_WIDGETS)
             ):
                 _LOGGER.error(
-                    "You have enabled ugeplaner, but we cannot find any supported widgets (0029,0004,0001) in Aula."
+                    "You have enabled ugeplaner, but we cannot find any supported widgets (0029,0004,0062,EasyIQ) in Aula."
                 )
             if "0029" in self.widgets and "0004" in self.widgets:
                 _LOGGER.warning(
@@ -1065,11 +1069,15 @@ class Client:
                     except:
                         _LOGGER.debug("Cannot fetch ugeplaner, so setting as empty")
                         _LOGGER.debug("ugeplaner response " + str(ugeplaner.text))
-                if "0001" in self.widgets:
+                easyiq_widget = next(
+                    (widget for widget in EASYIQ_WIDGETS if widget in self.widgets),
+                    None,
+                )
+                if easyiq_widget is not None:
                     import calendar
 
-                    _LOGGER.debug("In the EasyIQ flow")
-                    token = self.get_token("0001")
+                    _LOGGER.debug(f"In the EasyIQ flow using widget {easyiq_widget}")
+                    token = self.get_token(easyiq_widget)
                     csrf_token = self._get_csrf_token()
 
                     easyiq_headers = {
