@@ -13,6 +13,7 @@ import argparse
 import datetime
 import json
 import sys
+import uuid
 
 import requests
 
@@ -45,6 +46,11 @@ def parse_args():
     parser.add_argument(
         "--date",
         help="Week start date, YYYY-MM-DD; defaults to today",
+    )
+    parser.add_argument(
+        "--widget-instance-id",
+        default=str(uuid.uuid4()),
+        help="Browser X-WidgetInstanceId value; generated when omitted",
     )
     return parser.parse_args()
 
@@ -86,6 +92,7 @@ def main():
         "X-UserProfile": "guardian",
         "X-ChildFilter": args.children,
         "X-Child": args.child,
+        "X-WidgetInstanceId": args.widget_instance_id,
         "X-Requested-With": "XMLHttpRequest",
         "Referer": BASE_URL + WIDGET_PATH,
         "Origin": BASE_URL,
@@ -104,6 +111,7 @@ def main():
     print(f"    status={widget_response.status_code}")
     print(f"    content_type={widget_response.headers.get('Content-Type')}")
     print(f"    cookies={sorted(session.cookies.keys())}")
+    print(f"    widget_instance_id={args.widget_instance_id}")
 
     print("[2] POST /AuthenticateAulaUser (empty body)")
     auth_response = session.post(
