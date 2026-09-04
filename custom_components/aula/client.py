@@ -1149,6 +1149,9 @@ class Client:
                             easyiq_session.get(
                                 EASYIQ_SKOLEPORTAL_API + "/UgeplanWidget",
                                 headers=easyiq_headers,
+                                params={
+                                    "token": token.removeprefix("Bearer ").strip()
+                                },
                                 verify=True,
                                 timeout=10,
                             )
@@ -1156,7 +1159,10 @@ class Client:
                             # 2. Authenticate user to get child loginId
                             auth_resp = easyiq_session.post(
                                 EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
-                                headers=easyiq_headers,
+                                headers={
+                                    **easyiq_headers,
+                                    "Content-Length": "0",
+                                },
                                 verify=True,
                                 timeout=10,
                             )
