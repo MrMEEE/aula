@@ -20,7 +20,7 @@ import requests
 
 BASE_URL = "https://skoleportal.easyiqcloud.dk"
 WIDGET_PATH = "/UgeplanWidget"
-AUTH_PATH = "/AuthenticateAulaUser"
+AUTH_PATH = "/Aula/AuthenticateAulaUser"
 EVENTS_PATH = "/Calendar/CalendarGetWeekplanEvents"
 
 

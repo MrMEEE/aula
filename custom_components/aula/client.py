@@ -1160,7 +1160,7 @@ class Client:
 
                             # 2. Authenticate user to get child loginId
                             auth_resp = easyiq_session.post(
-                                EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
+                                EASYIQ_SKOLEPORTAL_API + "/Aula/AuthenticateAulaUser",
                                 headers={
                                     **easyiq_headers,
                                     "Content-Length": "0",
