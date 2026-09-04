@@ -1286,7 +1286,7 @@ class Client:
                                 raw_title = (item.get("Title") or item.get("title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or "").strip()
                                 desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
                                 description_title = extract_ugeplan_title(desc)
-                                is_notice = not raw_title and bool(course)
+                                is_notice = not course
                                 title = (
                                     raw_title
                                     or (extract_ugeplan_notice_title(desc) if is_notice else description_title)
@@ -1357,7 +1357,7 @@ class Client:
                                 raw_desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
                                 item_desc = html.unescape(BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ")).strip() if raw_desc else ""
                                 description_title = extract_ugeplan_title(raw_desc)
-                                is_notice = not raw_title and bool(course)
+                                is_notice = not course
                                 item_title = (
                                     raw_title
                                     or (extract_ugeplan_notice_title(raw_desc) if is_notice else description_title)
