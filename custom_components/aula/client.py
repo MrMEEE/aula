@@ -1083,105 +1083,129 @@ class Client:
                     token = self.get_token(easyiq_widget)
                     csrf_token = self._get_csrf_token()
 
-                    # 1. Try EasyIQ Skoleportal API (skoleportal.easyiqcloud.dk)
-                    easyiq_session = requests.Session()
-                    easyiq_headers = {
-                        "Authorization": token,
-                        "X-UserProfile": "guardian",
-                        "X-Login": guardian,
-                        "X-InstitutionFilter": ",".join(self._institutionProfiles),
-                        "X-ChildFilter": ",".join(self._childuserids),
-                        "Accept": "application/json, text/plain, */*",
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-                    }
-                    if csrf_token:
-                        easyiq_headers["csrfp-token"] = csrf_token
-
-                    events_by_child = {}
                     try:
-                        auth_resp = easyiq_session.post(
-                            EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
-                            headers=easyiq_headers,
-                            json={},
-                            verify=True,
-                            timeout=10,
-                        )
-                        _LOGGER.debug("EasyIQ Skoleportal Auth status %s: %s", auth_resp.status_code, auth_resp.text[:500])
-                        login_id = None
-                        if auth_resp.status_code == 200:
+                        year, week_num = week.split("-W")
+                        target_date = datetime.date.fromisocalendar(int(year), int(week_num), 1).strftime("%Y-%m-%dT00:00:00")
+                    except Exception:
+                        target_date = datetime.datetime.now().strftime("%Y-%m-%dT00:00:00")
+
+                    def parse_dt(dt_str):
+                        if not dt_str or not isinstance(dt_str, str):
+                            return None
+                        clean_str = dt_str.split("+")[0].split("Z")[0].split(".")[0].replace("T", " ").strip()
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d", "%Y/%m/%d"):
                             try:
-                                auth_json = auth_resp.json()
-                                login_id = auth_json.get("LoginId") or auth_json.get("loginId") or auth_json.get("id")
-                            except Exception:
+                                return datetime.datetime.strptime(clean_str, fmt)
+                            except ValueError:
                                 pass
+                        return None
+
+                    days = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"]
+                    cph_tz = pytz.timezone("Europe/Copenhagen")
+
+                    for child_userid, first_name in self._childrenFirstNamesAndUserIDs.items():
+                        easyiq_session = requests.Session()
+                        easyiq_headers = {
+                            "Authorization": token,
+                            "X-UserProfile": "guardian",
+                            "X-Login": guardian,
+                            "X-InstitutionFilter": ",".join(self._institutionProfiles),
+                            "X-ChildFilter": ",".join(self._childuserids),
+                            "X-Child": str(child_userid),
+                            "X-Requested-With": "Fetch",
+                            "Accept": "application/json, text/plain, */*",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+                        }
+                        if csrf_token:
+                            easyiq_headers["csrfp-token"] = csrf_token
+
+                        login_id = None
+                        activity_filter = None
+                        events_list = []
+                        skoleportal_success = False
 
                         try:
-                            year, week_num = week.split("-W")
-                            target_date = datetime.date.fromisocalendar(int(year), int(week_num), 1).strftime("%Y-%m-%dT00:00:00")
-                        except Exception:
-                            target_date = datetime.datetime.now().strftime("%Y-%m-%dT00:00:00")
+                            auth_resp = easyiq_session.post(
+                                EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
+                                headers=easyiq_headers,
+                                json={},
+                                verify=True,
+                                timeout=10,
+                            )
+                            _LOGGER.debug("EasyIQ Skoleportal Auth status %s for %s: %s", auth_resp.status_code, first_name, auth_resp.text[:500])
 
-                        params = {
-                            "courseFilter": "-1",
-                            "textFilter": "",
-                            "ownWeekPlan": "false",
-                            "date": target_date,
-                        }
-                        if login_id:
-                            params["loginId"] = str(login_id)
+                            if auth_resp.status_code == 200 and auth_resp.text.strip().startswith("{"):
+                                try:
+                                    auth_json = auth_resp.json()
+                                    login_id = auth_json.get("LoginId") or auth_json.get("loginId") or auth_json.get("id")
+                                    activity_filter = auth_json.get("ActivityFilter") or auth_json.get("activityFilter")
+                                except Exception as json_e:
+                                    _LOGGER.debug("Could not parse auth_json for %s: %s", first_name, json_e)
 
-                        events_resp = easyiq_session.get(
-                            EASYIQ_SKOLEPORTAL_API + "/CalendarGetWeekplanEvents",
-                            headers=easyiq_headers,
-                            params=params,
-                            verify=True,
-                            timeout=10,
-                        )
-                        _LOGGER.debug("EasyIQ Skoleportal events status %s: %s", events_resp.status_code, events_resp.text[:1000])
+                            if not login_id:
+                                try:
+                                    gc_resp = easyiq_session.get(
+                                        EASYIQ_SKOLEPORTAL_API + "/GetChildren",
+                                        headers=easyiq_headers,
+                                        verify=True,
+                                        timeout=10,
+                                    )
+                                    _LOGGER.debug("EasyIQ Skoleportal GetChildren status %s for %s: %s", gc_resp.status_code, first_name, gc_resp.text[:500])
+                                    if gc_resp.status_code == 200 and gc_resp.text.strip().startswith(("{", "[")):
+                                        gc_json = gc_resp.json()
+                                        if isinstance(gc_json, list):
+                                            for item in gc_json:
+                                                if str(item.get("UserId") or item.get("userId") or "") == str(child_userid):
+                                                    login_id = item.get("LoginId") or item.get("loginId") or item.get("Id") or item.get("id")
+                                                    break
+                                        elif isinstance(gc_json, dict):
+                                            login_id = gc_json.get("LoginId") or gc_json.get("loginId")
+                                except Exception as gc_err:
+                                    _LOGGER.debug("GetChildren call failed for %s: %s", first_name, gc_err)
 
-                        if events_resp.status_code == 200:
-                            raw_events = events_resp.json()
-                            events_list = []
-                            if isinstance(raw_events, list):
-                                events_list = raw_events
-                            elif isinstance(raw_events, dict):
-                                events_list = (
-                                    raw_events.get("Events")
-                                    or raw_events.get("events")
-                                    or raw_events.get("data")
-                                    or raw_events.get("items")
-                                    or raw_events.get("WeekPlan")
-                                    or []
-                                )
+                            params = {
+                                "date": target_date,
+                                "courseFilter": "-1",
+                                "textFilter": "",
+                                "ownWeekPlan": "false",
+                            }
+                            if login_id:
+                                params["loginId"] = str(login_id)
+                            if activity_filter:
+                                params["activityFilter"] = str(activity_filter)
 
-                            if events_list:
-                                for child in self._childrenFirstNamesAndUserIDs.items():
-                                    first_name = child[1]
-                                    events_by_child[first_name] = events_list
-                    except Exception as err:
-                        _LOGGER.warning("EasyIQ Skoleportal API call failed: %s", err)
+                            events_resp = easyiq_session.get(
+                                EASYIQ_SKOLEPORTAL_API + "/CalendarGetWeekplanEvents",
+                                headers=easyiq_headers,
+                                params=params,
+                                verify=True,
+                                timeout=10,
+                            )
+                            _LOGGER.debug("EasyIQ Skoleportal events status %s for %s (loginId=%s): %s", events_resp.status_code, first_name, login_id, events_resp.text[:1000])
 
-                    for child in self._childrenFirstNamesAndUserIDs.items():
-                        userid = child[0]
-                        first_name = child[1]
+                            if events_resp.status_code == 200 and not events_resp.text.strip().startswith("<"):
+                                raw_events = events_resp.json()
+                                skoleportal_success = True
+                                if isinstance(raw_events, list):
+                                    events_list = raw_events
+                                elif isinstance(raw_events, dict):
+                                    events_list = (
+                                        raw_events.get("Events")
+                                        or raw_events.get("events")
+                                        or raw_events.get("data")
+                                        or raw_events.get("items")
+                                        or raw_events.get("WeekPlan")
+                                        or []
+                                    )
+                            else:
+                                _LOGGER.debug("EasyIQ Skoleportal returned non-JSON response for %s: %s", first_name, events_resp.text[:200])
+                        except Exception as err:
+                            _LOGGER.warning("EasyIQ Skoleportal API call failed for %s: %s", first_name, err)
 
-                        if first_name in events_by_child:
-                            events_list = events_by_child[first_name]
+                        if skoleportal_success:
                             week_num_str = week.split("-W")[-1] if "-W" in week else week
                             _ugep = f"<h2>Uge {week_num_str}</h2>"
 
-                            def parse_dt(dt_str):
-                                if not dt_str or not isinstance(dt_str, str):
-                                    return None
-                                clean_str = dt_str.split("+")[0].split("Z")[0].split(".")[0].replace("T", " ").strip()
-                                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d", "%Y/%m/%d"):
-                                    try:
-                                        return datetime.datetime.strptime(clean_str, fmt)
-                                    except ValueError:
-                                        pass
-                                return None
-
-                            days = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"]
                             events_by_day = {}
                             important_notes = []
 
@@ -1243,7 +1267,6 @@ class Client:
                             elif thisnext == "next":
                                 self.ugepnext_attr[first_name] = _ugep
 
-                            cph_tz = pytz.timezone("Europe/Copenhagen")
                             if first_name not in self.ugep_events or thisnext == "this":
                                 self.ugep_events[first_name] = []
 
@@ -1285,7 +1308,7 @@ class Client:
                                 else:
                                     try:
                                         y, w = week.split("-W")
-                                        m_date = datetime.datetime.strptime(f"{y}-W{w}-1", "%Y-W%W-%w").date()
+                                        m_date = datetime.date.fromisocalendar(int(y), int(w), 1)
                                     except Exception:
                                         m_date = datetime.date.today()
                                     ev_start = m_date
@@ -1302,7 +1325,7 @@ class Client:
                             _LOGGER.debug("EasyIQ Skoleportal result for %s: %s", first_name, _ugep)
                         else:
                             # 2. Fallback to legacy EasyIQ API
-                            easyiq_headers = {
+                            easyiq_legacy_headers = {
                                 "x-aula-institutionfilter": str(self._institutionProfiles[0]),
                                 "x-aula-userprofile": "guardian",
                                 "Authorization": token,
@@ -1312,21 +1335,21 @@ class Client:
                                 "authority": "api.easyiqcloud.dk",
                             }
                             if csrf_token:
-                                easyiq_headers["csrfp-token"] = csrf_token
+                                easyiq_legacy_headers["csrfp-token"] = csrf_token
 
-                            _LOGGER.debug("EasyIQ legacy headers " + str(easyiq_headers))
+                            _LOGGER.debug("EasyIQ legacy headers " + str(easyiq_legacy_headers))
                             post_data = {
                                 "sessionId": guardian,
                                 "currentWeekNr": week,
                                 "userProfile": "guardian",
                                 "institutionFilter": self._institutionProfiles,
-                                "childFilter": [userid],
+                                "childFilter": [child_userid],
                             }
                             _LOGGER.debug("EasyIQ legacy post data " + str(post_data))
                             ugeplaner = requests.post(
                                 EASYIQ_API + "/weekplaninfo",
                                 json=post_data,
-                                headers=easyiq_headers,
+                                headers=easyiq_legacy_headers,
                                 verify=True,
                             )
                             _LOGGER.debug(
