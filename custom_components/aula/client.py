@@ -1182,25 +1182,15 @@ class Client:
                                 except Exception as init_e:
                                     _LOGGER.debug("EasyIQ init probe %s failed for %s: %s", init_url, first_name, init_e)
 
-                        if not login_id:
-                            for ep in ("/GetChildren", "/GetByDate", "/WeekPlan/WidgetLinks"):
-                                try:
-                                    probe_resp = easyiq_session.get(
-                                        EASYIQ_SKOLEPORTAL_API + ep,
-                                        headers=easyiq_headers,
-                                        verify=True,
-                                        timeout=10,
-                                    )
-                                    _LOGGER.debug("EasyIQ Skoleportal %s status %s for %s: %r", ep, probe_resp.status_code, first_name, probe_resp.text[:200])
-                                    if probe_resp.status_code == 200 and probe_resp.text.strip().startswith(("{", "[")):
-                                        probe_json = probe_resp.json()
-                                        login_id = extract_json_key(probe_json, ["LoginId", "loginId", "Id", "id"])
-                                        if not activity_filter:
-                                            activity_filter = extract_json_key(probe_json, ["ActivityFilter", "activityFilter"])
-                                        if login_id:
-                                            break
-                                except Exception as probe_err:
-                                    _LOGGER.debug("%s call failed for %s: %s", ep, first_name, probe_err)
+                        # Try CalendarGetWeekplanEvents endpoint paths
+                        events_endpoints = [
+                            "/Calendar/CalendarGetWeekplanEvents",
+                            "/CalendarGetWeekplanEvents",
+                        ]
+
+                        for ep_path in events_endpoints:
+                            if skoleportal_success:
+                                break
 
                             params = {
                                 "date": target_date,
@@ -1213,34 +1203,34 @@ class Client:
                             if activity_filter:
                                 params["activityFilter"] = str(activity_filter)
 
-                        try:
-                            events_resp = easyiq_session.get(
-                                EASYIQ_SKOLEPORTAL_API + "/CalendarGetWeekplanEvents",
-                                headers=easyiq_headers,
-                                params=params,
-                                verify=True,
-                                timeout=10,
-                            )
-                            _LOGGER.debug("EasyIQ Skoleportal events status %s for %s (loginId=%s): %r", events_resp.status_code, first_name, login_id, events_resp.text[:500])
+                            try:
+                                events_resp = easyiq_session.get(
+                                    EASYIQ_SKOLEPORTAL_API + ep_path,
+                                    headers=easyiq_headers,
+                                    params=params,
+                                    verify=True,
+                                    timeout=10,
+                                )
+                                _LOGGER.debug("EasyIQ Skoleportal events status %s for %s on %s (loginId=%s): %r", events_resp.status_code, first_name, ep_path, login_id, events_resp.text[:500])
 
-                            if events_resp.status_code == 200 and events_resp.text.strip().startswith(("{", "[")):
-                                raw_events = events_resp.json()
-                                skoleportal_success = True
-                                if isinstance(raw_events, list):
-                                    events_list = raw_events
-                                elif isinstance(raw_events, dict):
-                                    events_list = (
-                                        raw_events.get("Events")
-                                        or raw_events.get("events")
-                                        or raw_events.get("data")
-                                        or raw_events.get("items")
-                                        or raw_events.get("WeekPlan")
-                                        or []
-                                    )
-                            else:
-                                _LOGGER.debug("EasyIQ Skoleportal returned non-JSON response for %s: %r", first_name, events_resp.text[:200])
-                        except Exception as err:
-                            _LOGGER.warning("EasyIQ Skoleportal API call failed for %s: %s", first_name, err)
+                                if events_resp.status_code == 200 and events_resp.text.strip().startswith(("{", "[")):
+                                    raw_events = events_resp.json()
+                                    skoleportal_success = True
+                                    if isinstance(raw_events, list):
+                                        events_list = raw_events
+                                    elif isinstance(raw_events, dict):
+                                        events_list = (
+                                            raw_events.get("Events")
+                                            or raw_events.get("events")
+                                            or raw_events.get("data")
+                                            or raw_events.get("items")
+                                            or raw_events.get("WeekPlan")
+                                            or []
+                                        )
+                                else:
+                                    _LOGGER.debug("EasyIQ Skoleportal returned non-JSON response for %s on %s: %r", first_name, ep_path, events_resp.text[:200])
+                            except Exception as err:
+                                _LOGGER.warning("EasyIQ Skoleportal API call failed for %s on %s: %s", first_name, ep_path, err)
 
                         if skoleportal_success:
                             week_num_str = week.split("-W")[-1] if "-W" in week else week
