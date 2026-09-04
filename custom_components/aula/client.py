@@ -1157,7 +1157,6 @@ class Client:
                             auth_resp = easyiq_session.post(
                                 EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
                                 headers=easyiq_headers,
-                                json={},
                                 verify=True,
                                 timeout=10,
                             )
@@ -1331,15 +1330,6 @@ class Client:
                                         m_date = datetime.date.today()
                                     ev_start = m_date
                                     ev_end = m_date + datetime.timedelta(days=1)
-
-                                self.ugep_events[first_name].append(
-                                    CalendarEvent(
-                                        summary=summary,
-                                        start=ev_start,
-                                        end=ev_end,
-                                        description=item_desc or None,
-                                    )
-                                )
 
                                 self.ugep_events[first_name].append(
                                     CalendarEvent(
