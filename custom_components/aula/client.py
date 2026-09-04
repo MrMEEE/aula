@@ -1121,6 +1121,8 @@ class Client:
 
                     for child_userid, first_name in self._childrenFirstNamesAndUserIDs.items():
                         easyiq_session = requests.Session()
+                        raw_jwt = self._bearertoken
+
                         easyiq_headers = {
                             "Authorization": token,
                             "X-UserProfile": "guardian",
@@ -1140,43 +1142,65 @@ class Client:
                         events_list = []
                         skoleportal_success = False
 
-                        try:
-                            auth_resp = easyiq_session.post(
-                                EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
-                                headers=easyiq_headers,
-                                json={},
-                                verify=True,
-                                timeout=10,
-                            )
-                            _LOGGER.debug("EasyIQ Skoleportal Auth status %s for %s: %r", auth_resp.status_code, first_name, auth_resp.text[:300])
+                        # Probe initial authentication URLs to obtain ASP.NET session / FedAuth cookies
+                        auth_payloads = [
+                            {"token": raw_jwt},
+                            {"token": token},
+                            {"Token": raw_jwt},
+                        ]
 
-                            if auth_resp.status_code == 200:
+                        for init_url in (
+                            EASYIQ_SKOLEPORTAL_API + "/UgeplanWidget",
+                            EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
+                        ):
+                            for payload in auth_payloads:
                                 try:
-                                    auth_json = auth_resp.json()
-                                    login_id = extract_json_key(auth_json, ["LoginId", "loginId", "Id", "id"])
-                                    activity_filter = extract_json_key(auth_json, ["ActivityFilter", "activityFilter", "ActivityId", "activityId"])
-                                except Exception as json_e:
-                                    _LOGGER.debug("Could not parse auth_json for %s: %s", first_name, json_e)
+                                    r_get = easyiq_session.get(init_url, params=payload, headers=easyiq_headers, verify=True, timeout=10)
+                                    _LOGGER.debug("EasyIQ init GET %s params=%s status %s (cookies=%s)", init_url, payload.keys(), r_get.status_code, list(easyiq_session.cookies.keys()))
+                                    
+                                    r_post_f = easyiq_session.post(init_url, data=payload, headers=easyiq_headers, verify=True, timeout=10)
+                                    _LOGGER.debug("EasyIQ init POST form %s status %s (cookies=%s)", init_url, r_post_f.status_code, list(easyiq_session.cookies.keys()))
+                                    if r_post_f.status_code == 200 and r_post_f.text.strip().startswith("{"):
+                                        try:
+                                            auth_json = r_post_f.json()
+                                            login_id = extract_json_key(auth_json, ["LoginId", "loginId", "Id", "id"])
+                                            activity_filter = extract_json_key(auth_json, ["ActivityFilter", "activityFilter", "ActivityId", "activityId"])
+                                        except Exception:
+                                            pass
 
-                            if not login_id:
-                                for ep in ("/GetChildren", "/GetByDate", "/WeekPlan/WidgetLinks"):
-                                    try:
-                                        probe_resp = easyiq_session.get(
-                                            EASYIQ_SKOLEPORTAL_API + ep,
-                                            headers=easyiq_headers,
-                                            verify=True,
-                                            timeout=10,
-                                        )
-                                        _LOGGER.debug("EasyIQ Skoleportal %s status %s for %s: %r", ep, probe_resp.status_code, first_name, probe_resp.text[:300])
-                                        if probe_resp.status_code == 200 and probe_resp.text.strip().startswith(("{", "[")):
-                                            probe_json = probe_resp.json()
-                                            login_id = extract_json_key(probe_json, ["LoginId", "loginId", "Id", "id"])
+                                    r_post_j = easyiq_session.post(init_url, json=payload, headers=easyiq_headers, verify=True, timeout=10)
+                                    _LOGGER.debug("EasyIQ init POST json %s status %s (cookies=%s)", init_url, r_post_j.status_code, list(easyiq_session.cookies.keys()))
+                                    if r_post_j.status_code == 200 and r_post_j.text.strip().startswith("{"):
+                                        try:
+                                            auth_json = r_post_j.json()
+                                            if not login_id:
+                                                login_id = extract_json_key(auth_json, ["LoginId", "loginId", "Id", "id"])
                                             if not activity_filter:
-                                                activity_filter = extract_json_key(probe_json, ["ActivityFilter", "activityFilter"])
-                                            if login_id:
-                                                break
-                                    except Exception as probe_err:
-                                        _LOGGER.debug("%s call failed for %s: %s", ep, first_name, probe_err)
+                                                activity_filter = extract_json_key(auth_json, ["ActivityFilter", "activityFilter", "ActivityId", "activityId"])
+                                        except Exception:
+                                            pass
+                                except Exception as init_e:
+                                    _LOGGER.debug("EasyIQ init probe %s failed for %s: %s", init_url, first_name, init_e)
+
+                        if not login_id:
+                            for ep in ("/GetChildren", "/GetByDate", "/WeekPlan/WidgetLinks"):
+                                try:
+                                    probe_resp = easyiq_session.get(
+                                        EASYIQ_SKOLEPORTAL_API + ep,
+                                        headers=easyiq_headers,
+                                        verify=True,
+                                        timeout=10,
+                                    )
+                                    _LOGGER.debug("EasyIQ Skoleportal %s status %s for %s: %r", ep, probe_resp.status_code, first_name, probe_resp.text[:200])
+                                    if probe_resp.status_code == 200 and probe_resp.text.strip().startswith(("{", "[")):
+                                        probe_json = probe_resp.json()
+                                        login_id = extract_json_key(probe_json, ["LoginId", "loginId", "Id", "id"])
+                                        if not activity_filter:
+                                            activity_filter = extract_json_key(probe_json, ["ActivityFilter", "activityFilter"])
+                                        if login_id:
+                                            break
+                                except Exception as probe_err:
+                                    _LOGGER.debug("%s call failed for %s: %s", ep, first_name, probe_err)
 
                             params = {
                                 "date": target_date,
@@ -1189,6 +1213,7 @@ class Client:
                             if activity_filter:
                                 params["activityFilter"] = str(activity_filter)
 
+                        try:
                             events_resp = easyiq_session.get(
                                 EASYIQ_SKOLEPORTAL_API + "/CalendarGetWeekplanEvents",
                                 headers=easyiq_headers,
