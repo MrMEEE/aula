@@ -53,6 +53,11 @@ def parse_args():
         help="Browser X-WidgetInstanceId value; generated when omitted",
     )
     parser.add_argument(
+        "--dump-events",
+        action="store_true",
+        help="Print classification fields for every returned event",
+    )
+    parser.add_argument(
         "--compare-children",
         metavar="CHILD1,CHILD2",
         help="Authenticate two children and verify their login IDs differ",
@@ -80,6 +85,19 @@ def json_events(response):
             or []
         )
     return None
+
+
+def description_heading(description):
+    if not description:
+        return ""
+    marker_start = description.lower().find("<h")
+    if marker_start < 0:
+        return ""
+    marker_end = description.find(">", marker_start)
+    closing = description.lower().find("</", marker_end)
+    if marker_end < 0 or closing < 0:
+        return ""
+    return description[marker_end + 1 : closing].strip()
 
 
 def authenticate_child(args, child, widget_instance_id):
@@ -119,14 +137,14 @@ def authenticate_child(args, child, widget_instance_id):
     except ValueError:
         payload = None
     if not isinstance(payload, dict):
-        return response, None
+        return response, None, None
     login_id = (
         payload.get("loginId")
         or payload.get("LoginId")
         or payload.get("id")
         or payload.get("Id")
     )
-    return response, login_id
+    return response, login_id, payload
 
 
 def main():
@@ -143,9 +161,13 @@ def main():
         login_ids = []
         for child in children:
             instance_id = str(uuid.uuid4())
-            response, login_id = authenticate_child(args, child, instance_id)
+            response, login_id, payload = authenticate_child(args, child, instance_id)
             print(f"child={child} status={response.status_code} content_type={response.headers.get('Content-Type')}")
             print(f"child={child} login_id={login_id}")
+            if payload:
+                print(f"child={child} response_child={payload.get('child') or payload.get('Child')}")
+                print(f"child={child} child_name={payload.get('childName') or payload.get('ChildName')}")
+                print(f"child={child} school_id={payload.get('schoolId') or payload.get('SchoolId')}")
             login_ids.append(login_id)
         if None in login_ids:
             print("RESULT: could not obtain both login IDs")
@@ -255,6 +277,20 @@ def main():
         return 1
 
     print(f"    RESULT: received {len(events)} JSON events")
+    if args.dump_events:
+        print("    EVENT FIELDS:")
+        for index, event in enumerate(events, 1):
+            if not isinstance(event, dict):
+                print(f"    {index}: {event!r}")
+                continue
+            description = event.get("Description") or event.get("description") or ""
+            print(
+                f"    {index}: Title={event.get('Title')!r} "
+                f"CoursesDisplay={event.get('CoursesDisplay')!r} "
+                f"IsAllDay={event.get('IsAllDay')!r} "
+                f"StartTime={event.get('StartTime')!r} "
+                f"Heading={description_heading(description)!r}"
+            )
     for index, event in enumerate(events[:5], 1):
         if not isinstance(event, dict):
             print(f"    event_{index}={event!r}")
