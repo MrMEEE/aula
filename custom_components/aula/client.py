@@ -1146,6 +1146,7 @@ class Client:
                         activity_filter = None
                         events_list = []
                         skoleportal_success = False
+                        skoleportal_auth_response = False
 
                         try:
                             # 1. Access UgeplanWidget page to initialize session
@@ -1175,13 +1176,14 @@ class Client:
                                 try:
                                     auth_json = auth_resp.json()
                                     if isinstance(auth_json, dict):
+                                        skoleportal_auth_response = True
                                         auth_child = auth_json.get("child") or auth_json.get("Child")
                                         candidate_login_id = auth_json.get("loginId") or auth_json.get("LoginId") or auth_json.get("id") or auth_json.get("Id")
                                         if auth_child and str(auth_child) != str(child_userid):
-                                            _LOGGER.error(
-                                                "EasyIQ returned loginId for child %s while requesting child %s",
-                                                auth_child,
+                                            _LOGGER.info(
+                                                "EasyIQ Ugeplan is unavailable for child %s; response belongs to child %s",
                                                 child_userid,
+                                                auth_child,
                                             )
                                         else:
                                             login_id = candidate_login_id
@@ -1360,7 +1362,7 @@ class Client:
                                     )
                                 )
                             _LOGGER.debug("EasyIQ Skoleportal result for %s: %s", first_name, _ugep)
-                        else:
+                        elif not skoleportal_auth_response:
                             # 2. Fallback to legacy EasyIQ API
                             easyiq_legacy_headers = {
                                 "x-aula-institutionfilter": str(self._institutionProfiles[0]),
