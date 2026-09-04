@@ -86,7 +86,7 @@ def extract_ugeplan_title(description):
     if not description:
         return ""
     soup = BeautifulSoup(description, "html.parser")
-    for tag in soup.find_all(["strong", "b", "h1", "h2", "h3"]):
+    for tag in soup.find_all(["h1", "h2", "h3"]):
         title = tag.get_text(" ", strip=True)
         if title:
             return html.unescape(title).strip()
@@ -1343,7 +1343,9 @@ class Client:
 
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
-                                is_all_day = is_ugeplan_all_day(item.get("IsAllDay"))
+                                is_all_day = is_ugeplan_all_day(item.get("IsAllDay")) or (
+                                    not raw_title and bool(description_title)
+                                )
 
                                 summary = item_title
                                 if item_owner and item_owner != item_title:
