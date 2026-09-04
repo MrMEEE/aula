@@ -161,6 +161,7 @@ class Client:
         # HTTP session
         self._session = None
         self.unread_messages = unread_messages
+        self.easyiq_login_ids = {}
 
     def _get_access_token_param(self):
         if self._tokens and "access_token" in self._tokens:
@@ -1174,9 +1175,20 @@ class Client:
                                 try:
                                     auth_json = auth_resp.json()
                                     if isinstance(auth_json, dict):
-                                        login_id = auth_json.get("loginId") or auth_json.get("LoginId") or auth_json.get("id") or auth_json.get("Id")
-                                        activity_filter = auth_json.get("activityFilter") or auth_json.get("ActivityFilter")
-                                        _LOGGER.debug("Extracted EasyIQ loginId=%s activityFilter=%s for %s", login_id, activity_filter, first_name)
+                                        auth_child = auth_json.get("child") or auth_json.get("Child")
+                                        candidate_login_id = auth_json.get("loginId") or auth_json.get("LoginId") or auth_json.get("id") or auth_json.get("Id")
+                                        if auth_child and str(auth_child) != str(child_userid):
+                                            _LOGGER.error(
+                                                "EasyIQ returned loginId for child %s while requesting child %s",
+                                                auth_child,
+                                                child_userid,
+                                            )
+                                        else:
+                                            login_id = candidate_login_id
+                                            if login_id:
+                                                self.easyiq_login_ids[str(child_userid)] = str(login_id)
+                                            activity_filter = auth_json.get("activityFilter") or auth_json.get("ActivityFilter")
+                                            _LOGGER.debug("Extracted EasyIQ loginId=%s for %s (child=%s)", login_id, first_name, child_userid)
                                     else:
                                         _LOGGER.debug("EasyIQ Auth response is not a dict for %s: %r", first_name, auth_resp.text[:200])
                                 except Exception as json_e:
