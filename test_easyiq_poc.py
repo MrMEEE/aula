@@ -52,6 +52,11 @@ def parse_args():
         default=str(uuid.uuid4()),
         help="Browser X-WidgetInstanceId value; generated when omitted",
     )
+    parser.add_argument(
+        "--compare-children",
+        metavar="CHILD1,CHILD2",
+        help="Authenticate two children and verify their login IDs differ",
+    )
     return parser.parse_args()
 
 
@@ -77,11 +82,79 @@ def json_events(response):
     return None
 
 
+def authenticate_child(args, child, widget_instance_id):
+    """Run the browser authentication flow for one child."""
+    token = args.token.removeprefix("Bearer ").strip()
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Authorization": "Bearer " + token,
+        "X-Login": args.login,
+        "X-InstitutionFilter": args.institutions,
+        "X-UserProfile": "guardian",
+        "X-ChildFilter": args.children,
+        "X-Child": child,
+        "X-WidgetInstanceId": widget_instance_id,
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": BASE_URL + WIDGET_PATH,
+        "Origin": BASE_URL,
+    }
+    session = requests.Session()
+    session.headers.update(headers)
+    session.get(
+        BASE_URL + WIDGET_PATH,
+        params={"token": token},
+        allow_redirects=True,
+        timeout=15,
+    )
+    response = session.post(
+        BASE_URL + AUTH_PATH,
+        headers={"Content-Length": "0"},
+        data=None,
+        allow_redirects=True,
+        timeout=15,
+    )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        return response, None
+    login_id = (
+        payload.get("loginId")
+        or payload.get("LoginId")
+        or payload.get("id")
+        or payload.get("Id")
+    )
+    return response, login_id
+
+
 def main():
     args = parse_args()
     token = args.token.removeprefix("Bearer ").strip()
     auth_header = "Bearer " + token
     target_date = args.date or datetime.date.today().strftime("%Y-%m-%dT00:00:00")
+
+    if args.compare_children:
+        children = [child.strip() for child in args.compare_children.split(",") if child.strip()]
+        if len(children) != 2:
+            print("--compare-children requires exactly two comma-separated child IDs")
+            return 2
+        login_ids = []
+        for child in children:
+            instance_id = str(uuid.uuid4())
+            response, login_id = authenticate_child(args, child, instance_id)
+            print(f"child={child} status={response.status_code} content_type={response.headers.get('Content-Type')}")
+            print(f"child={child} login_id={login_id}")
+            login_ids.append(login_id)
+        if None in login_ids:
+            print("RESULT: could not obtain both login IDs")
+            return 1
+        if login_ids[0] == login_ids[1]:
+            print("RESULT: FAIL, both children returned the same login ID")
+            return 1
+        print("RESULT: PASS, children returned different login IDs")
+        return 0
 
     headers = {
         "User-Agent": "Mozilla/5.0",
