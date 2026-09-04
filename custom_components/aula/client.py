@@ -93,6 +93,14 @@ def extract_ugeplan_title(description):
     return ""
 
 
+def is_ugeplan_all_day(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return value == 1
+
+
 class Client:
     huskeliste = {}
     presence = {}
@@ -1335,9 +1343,7 @@ class Client:
 
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
-                                is_all_day = bool(item.get("IsAllDay")) or (
-                                    not raw_title and bool(description_title)
-                                )
+                                is_all_day = is_ugeplan_all_day(item.get("IsAllDay"))
 
                                 summary = item_title
                                 if item_owner and item_owner != item_title:
