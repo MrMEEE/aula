@@ -93,6 +93,14 @@ def extract_ugeplan_title(description):
     return ""
 
 
+def extract_ugeplan_notice_title(description):
+    title = extract_ugeplan_title(description)
+    if title:
+        return title
+    text = BeautifulSoup(description or "", "html.parser").get_text("\n")
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")
+
+
 def is_ugeplan_all_day(value):
     if isinstance(value, bool):
         return value
@@ -1142,6 +1150,13 @@ class Client:
                         return None
 
                     for child_userid, first_name in self._childrenFirstNamesAndUserIDs.items():
+                        child = next(
+                            (item for item in self._children if str(item.get("userId")) == str(child_userid)),
+                            {},
+                        )
+                        child_class = str(
+                            (child.get("institutionProfile") or {}).get("metadata") or ""
+                        ).strip()
                         easyiq_session = requests.Session()
                         easyiq_headers = {
                             "Authorization": token,
@@ -1271,7 +1286,13 @@ class Client:
                                 raw_title = (item.get("Title") or item.get("title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or "").strip()
                                 desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
                                 description_title = extract_ugeplan_title(desc)
-                                title = raw_title or description_title or course or "Ugeplan"
+                                is_notice = not raw_title and bool(course)
+                                title = (
+                                    raw_title
+                                    or (extract_ugeplan_notice_title(desc) if is_notice else description_title)
+                                    or course
+                                    or "Ugeplan"
+                                )
                                 owner = (item.get("OwnerName") or item.get("ownername") or item.get("ownerName") or item.get("teacher") or item.get("Teacher") or "").strip()
                                 start_str = item.get("StartTime") or item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
                                 end_str = item.get("EndTime") or item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
@@ -1279,7 +1300,7 @@ class Client:
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
 
-                                if start_dt:
+                                if start_dt and not is_notice:
                                     day_name = days[start_dt.weekday()]
                                     day_date = start_dt.date()
                                     time_str = start_dt.strftime("%H:%M")
@@ -1336,16 +1357,20 @@ class Client:
                                 raw_desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
                                 item_desc = html.unescape(BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ")).strip() if raw_desc else ""
                                 description_title = extract_ugeplan_title(raw_desc)
-                                item_title = raw_title or description_title or course or "Ugeplan"
+                                is_notice = not raw_title and bool(course)
+                                item_title = (
+                                    raw_title
+                                    or (extract_ugeplan_notice_title(raw_desc) if is_notice else description_title)
+                                    or course
+                                    or "Ugeplan"
+                                )
                                 item_owner = (item.get("OwnerName") or item.get("ownername") or item.get("ownerName") or item.get("teacher") or item.get("Teacher") or "").strip()
                                 start_str = item.get("StartTime") or item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
                                 end_str = item.get("EndTime") or item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
 
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
-                                is_all_day = is_ugeplan_all_day(item.get("IsAllDay")) or (
-                                    not raw_title and bool(description_title)
-                                )
+                                is_all_day = is_ugeplan_all_day(item.get("IsAllDay")) or is_notice
 
                                 summary = item_title
                                 if item_owner and item_owner != item_title:
