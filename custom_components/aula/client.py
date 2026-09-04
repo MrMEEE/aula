@@ -8,6 +8,7 @@ import datetime
 import base64
 import urllib.parse
 import html
+import uuid
 from bs4 import BeautifulSoup
 import json, re
 from .const import (
@@ -1131,6 +1132,7 @@ class Client:
                             "X-InstitutionFilter": ",".join(self._institutionProfiles),
                             "X-ChildFilter": ",".join(self._childuserids),
                             "X-Child": str(child_userid),
+                            "X-WidgetInstanceId": str(uuid.uuid4()),
                             "X-Requested-With": "XMLHttpRequest",
                             "Content-Type": "application/json",
                             "Accept": "application/json, text/plain, */*",
