@@ -82,6 +82,17 @@ def format_mu_opgaver(opgaver, first_name):
     return _ugep
 
 
+def extract_ugeplan_title(description):
+    if not description:
+        return ""
+    soup = BeautifulSoup(description, "html.parser")
+    for tag in soup.find_all(["strong", "b", "h1", "h2", "h3"]):
+        title = tag.get_text(" ", strip=True)
+        if title:
+            return html.unescape(title).strip()
+    return ""
+
+
 class Client:
     huskeliste = {}
     presence = {}
@@ -1250,8 +1261,9 @@ class Client:
                                     continue
                                 course = (item.get("CoursesDisplay") or "").strip()
                                 raw_title = (item.get("Title") or item.get("title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or "").strip()
-                                title = course or raw_title or "Ugeplan"
                                 desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
+                                description_title = extract_ugeplan_title(desc)
+                                title = raw_title or description_title or course or "Ugeplan"
                                 owner = (item.get("OwnerName") or item.get("ownername") or item.get("ownerName") or item.get("teacher") or item.get("Teacher") or "").strip()
                                 start_str = item.get("StartTime") or item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
                                 end_str = item.get("EndTime") or item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
@@ -1313,16 +1325,19 @@ class Client:
                                     continue
                                 course = (item.get("CoursesDisplay") or "").strip()
                                 raw_title = (item.get("Title") or item.get("title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or "").strip()
-                                item_title = course or raw_title or "Ugeplan"
                                 raw_desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
                                 item_desc = html.unescape(BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ")).strip() if raw_desc else ""
+                                description_title = extract_ugeplan_title(raw_desc)
+                                item_title = raw_title or description_title or course or "Ugeplan"
                                 item_owner = (item.get("OwnerName") or item.get("ownername") or item.get("ownerName") or item.get("teacher") or item.get("Teacher") or "").strip()
                                 start_str = item.get("StartTime") or item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
                                 end_str = item.get("EndTime") or item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
 
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
-                                is_all_day = bool(item.get("IsAllDay"))
+                                is_all_day = bool(item.get("IsAllDay")) or (
+                                    not raw_title and bool(description_title)
+                                )
 
                                 summary = item_title
                                 if item_owner and item_owner != item_title:
