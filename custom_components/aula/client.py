@@ -1103,6 +1103,22 @@ class Client:
                     days = ["Mandag", "Tirsdag", "Onsdag", "Torsdag", "Fredag", "Lørdag", "Søndag"]
                     cph_tz = pytz.timezone("Europe/Copenhagen")
 
+                    def extract_json_key(data, keys):
+                        """Recursively search a JSON dict/list for any key matching candidate list."""
+                        if isinstance(data, dict):
+                            for k, v in data.items():
+                                if k.lower() in [target.lower() for target in keys] and v is not None and str(v).strip() != "":
+                                    return v
+                                res = extract_json_key(v, keys)
+                                if res is not None:
+                                    return res
+                        elif isinstance(data, list):
+                            for item in data:
+                                res = extract_json_key(item, keys)
+                                if res is not None:
+                                    return res
+                        return None
+
                     for child_userid, first_name in self._childrenFirstNamesAndUserIDs.items():
                         easyiq_session = requests.Session()
                         easyiq_headers = {
@@ -1132,36 +1148,35 @@ class Client:
                                 verify=True,
                                 timeout=10,
                             )
-                            _LOGGER.debug("EasyIQ Skoleportal Auth status %s for %s: %s", auth_resp.status_code, first_name, auth_resp.text[:500])
+                            _LOGGER.debug("EasyIQ Skoleportal Auth status %s for %s: %r", auth_resp.status_code, first_name, auth_resp.text[:300])
 
-                            if auth_resp.status_code == 200 and auth_resp.text.strip().startswith("{"):
+                            if auth_resp.status_code == 200:
                                 try:
                                     auth_json = auth_resp.json()
-                                    login_id = auth_json.get("LoginId") or auth_json.get("loginId") or auth_json.get("id")
-                                    activity_filter = auth_json.get("ActivityFilter") or auth_json.get("activityFilter")
+                                    login_id = extract_json_key(auth_json, ["LoginId", "loginId", "Id", "id"])
+                                    activity_filter = extract_json_key(auth_json, ["ActivityFilter", "activityFilter", "ActivityId", "activityId"])
                                 except Exception as json_e:
                                     _LOGGER.debug("Could not parse auth_json for %s: %s", first_name, json_e)
 
                             if not login_id:
-                                try:
-                                    gc_resp = easyiq_session.get(
-                                        EASYIQ_SKOLEPORTAL_API + "/GetChildren",
-                                        headers=easyiq_headers,
-                                        verify=True,
-                                        timeout=10,
-                                    )
-                                    _LOGGER.debug("EasyIQ Skoleportal GetChildren status %s for %s: %s", gc_resp.status_code, first_name, gc_resp.text[:500])
-                                    if gc_resp.status_code == 200 and gc_resp.text.strip().startswith(("{", "[")):
-                                        gc_json = gc_resp.json()
-                                        if isinstance(gc_json, list):
-                                            for item in gc_json:
-                                                if str(item.get("UserId") or item.get("userId") or "") == str(child_userid):
-                                                    login_id = item.get("LoginId") or item.get("loginId") or item.get("Id") or item.get("id")
-                                                    break
-                                        elif isinstance(gc_json, dict):
-                                            login_id = gc_json.get("LoginId") or gc_json.get("loginId")
-                                except Exception as gc_err:
-                                    _LOGGER.debug("GetChildren call failed for %s: %s", first_name, gc_err)
+                                for ep in ("/GetChildren", "/GetByDate", "/WeekPlan/WidgetLinks"):
+                                    try:
+                                        probe_resp = easyiq_session.get(
+                                            EASYIQ_SKOLEPORTAL_API + ep,
+                                            headers=easyiq_headers,
+                                            verify=True,
+                                            timeout=10,
+                                        )
+                                        _LOGGER.debug("EasyIQ Skoleportal %s status %s for %s: %r", ep, probe_resp.status_code, first_name, probe_resp.text[:300])
+                                        if probe_resp.status_code == 200 and probe_resp.text.strip().startswith(("{", "[")):
+                                            probe_json = probe_resp.json()
+                                            login_id = extract_json_key(probe_json, ["LoginId", "loginId", "Id", "id"])
+                                            if not activity_filter:
+                                                activity_filter = extract_json_key(probe_json, ["ActivityFilter", "activityFilter"])
+                                            if login_id:
+                                                break
+                                    except Exception as probe_err:
+                                        _LOGGER.debug("%s call failed for %s: %s", ep, first_name, probe_err)
 
                             params = {
                                 "date": target_date,
@@ -1181,9 +1196,9 @@ class Client:
                                 verify=True,
                                 timeout=10,
                             )
-                            _LOGGER.debug("EasyIQ Skoleportal events status %s for %s (loginId=%s): %s", events_resp.status_code, first_name, login_id, events_resp.text[:1000])
+                            _LOGGER.debug("EasyIQ Skoleportal events status %s for %s (loginId=%s): %r", events_resp.status_code, first_name, login_id, events_resp.text[:500])
 
-                            if events_resp.status_code == 200 and not events_resp.text.strip().startswith("<"):
+                            if events_resp.status_code == 200 and events_resp.text.strip().startswith(("{", "[")):
                                 raw_events = events_resp.json()
                                 skoleportal_success = True
                                 if isinstance(raw_events, list):
@@ -1198,7 +1213,7 @@ class Client:
                                         or []
                                     )
                             else:
-                                _LOGGER.debug("EasyIQ Skoleportal returned non-JSON response for %s: %s", first_name, events_resp.text[:200])
+                                _LOGGER.debug("EasyIQ Skoleportal returned non-JSON response for %s: %r", first_name, events_resp.text[:200])
                         except Exception as err:
                             _LOGGER.warning("EasyIQ Skoleportal API call failed for %s: %s", first_name, err)
 
