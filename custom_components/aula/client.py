@@ -1130,7 +1130,8 @@ class Client:
                             "X-InstitutionFilter": ",".join(self._institutionProfiles),
                             "X-ChildFilter": ",".join(self._childuserids),
                             "X-Child": str(child_userid),
-                            "X-Requested-With": "Fetch",
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Content-Type": "application/json",
                             "Accept": "application/json, text/plain, */*",
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
                         }
@@ -1155,16 +1156,23 @@ class Client:
                             auth_resp = easyiq_session.post(
                                 EASYIQ_SKOLEPORTAL_API + "/AuthenticateAulaUser",
                                 headers=easyiq_headers,
+                                json={},
                                 verify=True,
                                 timeout=10,
                             )
                             _LOGGER.debug("EasyIQ Skoleportal Auth status %s for %s: %r", auth_resp.status_code, first_name, auth_resp.text[:500])
 
-                            if auth_resp.status_code == 200 and auth_resp.text.strip().startswith("{"):
-                                auth_json = auth_resp.json()
-                                login_id = auth_json.get("loginId") or auth_json.get("LoginId") or auth_json.get("id") or auth_json.get("Id")
-                                activity_filter = auth_json.get("activityFilter") or auth_json.get("ActivityFilter")
-                                _LOGGER.debug("Extracted EasyIQ loginId=%s activityFilter=%s for %s", login_id, activity_filter, first_name)
+                            if auth_resp.status_code == 200:
+                                try:
+                                    auth_json = auth_resp.json()
+                                    if isinstance(auth_json, dict):
+                                        login_id = auth_json.get("loginId") or auth_json.get("LoginId") or auth_json.get("id") or auth_json.get("Id")
+                                        activity_filter = auth_json.get("activityFilter") or auth_json.get("ActivityFilter")
+                                        _LOGGER.debug("Extracted EasyIQ loginId=%s activityFilter=%s for %s", login_id, activity_filter, first_name)
+                                    else:
+                                        _LOGGER.debug("EasyIQ Auth response is not a dict for %s: %r", first_name, auth_resp.text[:200])
+                                except Exception as json_e:
+                                    _LOGGER.debug("Could not parse auth_json for %s: %s (text: %r)", first_name, json_e, auth_resp.text[:200])
 
                             if login_id:
                                 params = {
@@ -1186,22 +1194,25 @@ class Client:
                                 )
                                 _LOGGER.debug("EasyIQ Skoleportal events status %s for %s (loginId=%s): %r", events_resp.status_code, first_name, login_id, events_resp.text[:500])
 
-                                if events_resp.status_code == 200 and events_resp.text.strip().startswith(("{", "[")):
-                                    raw_events = events_resp.json()
-                                    skoleportal_success = True
-                                    if isinstance(raw_events, list):
-                                        events_list = raw_events
-                                    elif isinstance(raw_events, dict):
-                                        events_list = (
-                                            raw_events.get("Events")
-                                            or raw_events.get("events")
-                                            or raw_events.get("data")
-                                            or raw_events.get("items")
-                                            or raw_events.get("WeekPlan")
-                                            or []
-                                        )
+                                if events_resp.status_code == 200:
+                                    try:
+                                        raw_events = events_resp.json()
+                                        skoleportal_success = True
+                                        if isinstance(raw_events, list):
+                                            events_list = raw_events
+                                        elif isinstance(raw_events, dict):
+                                            events_list = (
+                                                raw_events.get("Events")
+                                                or raw_events.get("events")
+                                                or raw_events.get("data")
+                                                or raw_events.get("items")
+                                                or raw_events.get("WeekPlan")
+                                                or []
+                                            )
+                                    except Exception as json_e:
+                                        _LOGGER.debug("Could not parse events JSON for %s: %s (text: %r)", first_name, json_e, events_resp.text[:200])
                                 else:
-                                    _LOGGER.debug("EasyIQ Skoleportal returned non-JSON response for %s: %r", first_name, events_resp.text[:200])
+                                    _LOGGER.debug("EasyIQ Skoleportal returned non-200 response for %s: %r", first_name, events_resp.text[:200])
                         except Exception as err:
                             _LOGGER.warning("EasyIQ Skoleportal API call failed for %s: %s", first_name, err)
 

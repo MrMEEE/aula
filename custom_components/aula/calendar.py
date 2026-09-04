@@ -486,8 +486,16 @@ class UgeplanCalendarDevice(CalendarEntity):
             if self._event_overlaps(ev.start, ev.end, start_date, end_date):
                 filtered.append(ev)
 
-        filtered.sort(key=lambda x: x.start)
+        filtered.sort(key=self._event_sort_key)
         return filtered
+
+    def _event_sort_key(self, ev):
+        val = ev.start
+        if isinstance(val, datetime):
+            if val.tzinfo is not None:
+                return val.astimezone(pytz.timezone("Europe/Copenhagen")).replace(tzinfo=None)
+            return val
+        return datetime.combine(val, datetime.min.time())
 
     def _event_overlaps(self, ev_start, ev_end, start_date, end_date):
         def to_dt(val):
@@ -526,6 +534,6 @@ class UgeplanCalendarDevice(CalendarEntity):
                 elif ev_start >= now:
                     upcoming.append(ev)
         if upcoming:
-            upcoming.sort(key=lambda x: x.start)
+            upcoming.sort(key=self._event_sort_key)
             return upcoming[0]
         return None
