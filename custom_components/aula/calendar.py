@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, date
 import logging, time
+import pytz
 from .const import (
     DOMAIN,
     CONF_SCHOOLSCHEDULE,

@@ -7,6 +7,7 @@ import threading
 import datetime
 import base64
 import urllib.parse
+import html
 from bs4 import BeautifulSoup
 import json, re
 from .const import (
@@ -1226,11 +1227,13 @@ class Client:
                             for item in events_list:
                                 if not isinstance(item, dict):
                                     continue
-                                title = item.get("title") or item.get("Title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or ""
-                                desc = item.get("description") or item.get("Description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or ""
-                                owner = item.get("ownername") or item.get("ownerName") or item.get("OwnerName") or item.get("teacher") or item.get("Teacher") or ""
-                                start_str = item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
-                                end_str = item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
+                                course = (item.get("CoursesDisplay") or "").strip()
+                                raw_title = (item.get("Title") or item.get("title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or "").strip()
+                                title = course or raw_title or "Ugeplan"
+                                desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
+                                owner = (item.get("OwnerName") or item.get("ownername") or item.get("ownerName") or item.get("teacher") or item.get("Teacher") or "").strip()
+                                start_str = item.get("StartTime") or item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
+                                end_str = item.get("EndTime") or item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
 
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
@@ -1287,26 +1290,27 @@ class Client:
                             for item in events_list:
                                 if not isinstance(item, dict):
                                     continue
-                                item_title = item.get("title") or item.get("Title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or ""
-                                item_desc = item.get("description") or item.get("Description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or ""
-                                item_owner = item.get("ownername") or item.get("ownerName") or item.get("OwnerName") or item.get("teacher") or item.get("Teacher") or ""
-                                start_str = item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
-                                end_str = item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
+                                course = (item.get("CoursesDisplay") or "").strip()
+                                raw_title = (item.get("Title") or item.get("title") or item.get("subject") or item.get("Subject") or item.get("name") or item.get("Name") or "").strip()
+                                item_title = course or raw_title or "Ugeplan"
+                                raw_desc = (item.get("Description") or item.get("description") or item.get("text") or item.get("Text") or item.get("content") or item.get("Content") or "").strip()
+                                item_desc = html.unescape(BeautifulSoup(raw_desc, "html.parser").get_text(separator=" ")).strip() if raw_desc else ""
+                                item_owner = (item.get("OwnerName") or item.get("ownername") or item.get("ownerName") or item.get("teacher") or item.get("Teacher") or "").strip()
+                                start_str = item.get("StartTime") or item.get("start") or item.get("Start") or item.get("startDate") or item.get("startDateTime")
+                                end_str = item.get("EndTime") or item.get("end") or item.get("End") or item.get("endDate") or item.get("endDateTime")
 
                                 start_dt = parse_dt(start_str)
                                 end_dt = parse_dt(end_str)
+                                is_all_day = bool(item.get("IsAllDay"))
 
                                 summary = item_title
                                 if item_owner and item_owner != item_title:
-                                    if summary:
-                                        summary += f" ({item_owner})"
-                                    else:
-                                        summary = item_owner
+                                    summary += f" ({item_owner})"
                                 if not summary:
                                     summary = "Ugeplan"
 
                                 if start_dt:
-                                    has_time = (start_dt.hour != 0 or start_dt.minute != 0) or (end_dt and (end_dt.hour != 0 or end_dt.minute != 0))
+                                    has_time = not is_all_day and (start_dt.hour != 0 or start_dt.minute != 0 or (end_dt and (end_dt.hour != 0 or end_dt.minute != 0)))
                                     if has_time:
                                         ev_start = cph_tz.localize(start_dt)
                                         if end_dt:
@@ -1327,6 +1331,15 @@ class Client:
                                         m_date = datetime.date.today()
                                     ev_start = m_date
                                     ev_end = m_date + datetime.timedelta(days=1)
+
+                                self.ugep_events[first_name].append(
+                                    CalendarEvent(
+                                        summary=summary,
+                                        start=ev_start,
+                                        end=ev_end,
+                                        description=item_desc or None,
+                                    )
+                                )
 
                                 self.ugep_events[first_name].append(
                                     CalendarEvent(
